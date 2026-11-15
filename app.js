@@ -2,7 +2,9 @@
 'use strict';
 
 const C = window.CONFIG || {};
-const DEMO = !C.supabaseUrl || !C.supabaseKey;
+// Demo (fake lots, nothing sent): when config.js is empty, or with ?demo on a local address.
+const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+const DEMO = !C.supabaseUrl || !C.supabaseKey || (LOCAL && new URLSearchParams(location.search).has('demo'));
 const BUCKET = 'emotes';
 // zip: archive read in the browser · raw: one source image · out: one emote sent (Discord's limit)
 const LIM = { zip: 20 << 20, raw: 4 << 20, out: 256 << 10, side: 256, entries: 300 };
@@ -376,7 +378,7 @@ function galleryView() {
       lot.votes != null && h('span', { class: 'badge' }, t('votes', { n: lot.votes })),
       lot.mine ? h('span', { class: 'badge approved' }, t('your_lot'))
         : cfg.votes_open && h('button', {
-          class: lot.voted ? 'on' : 'primary',
+          class: lot.voted ? 'done' : 'primary',
           disabled: !canVote || (!lot.voted && me.votes_used >= cfg.max_votes),
           title: !me ? t('need_login') : '',
           onclick: () => act(() => api.vote(lot.id, !lot.voted)),
@@ -386,11 +388,11 @@ function galleryView() {
 }
 
 function gate() {
-  if (!S.me) return h('div', { class: 'card' }, h('p', null, t('need_login')), h('button', { class: 'primary', onclick: api.login }, t('login')));
+  if (!S.me) return h('div', { class: 'card' }, h('p', null, t('need_login')), h('button', { class: 'discord', onclick: api.login }, t('login')));
   if (!S.me.member) return h('div', { class: 'card' }, h('p', null, t('not_member')),
     h('div', { class: 'row' },
       C.invite && h('a', { href: C.invite, target: '_blank', rel: 'noopener noreferrer' }, t('join')),
-      h('button', { class: 'primary', onclick: api.login }, t('relog'))));
+      h('button', { class: 'discord', onclick: api.login }, t('relog'))));
   return null;
 }
 
@@ -549,9 +551,9 @@ function render() {
           me.avatar && h('img', { src: me.avatar, alt: '', referrerPolicy: 'no-referrer' }),
           h('span', null, me.name || ''),
           h('button', { class: 'mini ghost', onclick: api.logout }, t('logout')))
-        : h('button', { class: 'primary', onclick: api.login }, t('login'))),
+        : h('button', { class: 'discord', onclick: api.login }, t('login'))),
     DEMO && h('div', { class: 'banner demo' }, t('demo')),
-    h('div', { class: 'banner' }, t(phase, { n: cfg.max_votes })),
+    h('div', { class: 'banner phase' }, t(phase, { n: cfg.max_votes })),
     flash && h('div', { class: 'banner' }, flash),
     h('div', { class: 'tabs' }, tabBtn('gallery'), tabBtn('mine'), me && me.admin && tabBtn('admin')),
     h('main', null, tab === 'gallery' ? galleryView() : tab === 'mine' ? mineView() : adminView()));
