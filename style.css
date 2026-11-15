@@ -25,11 +25,12 @@
   --font: 'Jersey 10', system-ui, sans-serif; --font-title: 'Jersey 15', system-ui, sans-serif;
   /* a preview of Discord's own chat: its colours, not the game's */
   --chat-dark: #313338; --chat-light: #ffffff;
-  --ball: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 60'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='.035' stroke-width='2.5'%3E%3Ccircle cx='30' cy='30' r='26'/%3E%3Cpath d='M4 30h18M38 30h18'/%3E%3Ccircle cx='30' cy='30' r='8'/%3E%3C/g%3E%3C/svg%3E");
+  /* the game's page pattern: a 120 px tile, two small Poke Balls in staggered rows, white at 3.5 % */
+  --ball: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='.035' stroke-width='4'%3E%3Ccircle cx='30' cy='30' r='18'/%3E%3Cpath d='M12 30h12M36 30h12'/%3E%3Ccircle cx='30' cy='30' r='5'/%3E%3Ccircle cx='90' cy='90' r='18'/%3E%3Cpath d='M72 90h12M96 90h12'/%3E%3Ccircle cx='90' cy='90' r='5'/%3E%3C/g%3E%3C/svg%3E");
 }
 * { box-sizing: border-box; }
 html { color-scheme: dark; scrollbar-gutter: stable; }
-body { margin: 0; min-height: 100vh; background: var(--bg) var(--ball) 0 0 / 120px; color: var(--text);
+body { margin: 0; min-height: 100vh; background: var(--bg) var(--ball) 0 0 / 120px 120px; color: var(--text);
   font: 400 var(--fs-body)/1.3 var(--font); font-synthesis: none; }
 #app { max-width: 1040px; margin: 0 auto; padding: 16px 16px 64px; }
 h1 { font: 400 var(--fs-display)/1 var(--font-title); margin: 0; }
@@ -105,6 +106,13 @@ button.mini { min-height: 32px; padding: 2px 12px; font-size: var(--fs-caption);
 input[type=number] { width: 72px; }
 input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--yellow); }
 .notes { margin: 0 0 12px; padding: 8px 16px 8px 32px; background: color-mix(in oklch, var(--red) 10%, var(--panel)); border: 2px solid color-mix(in srgb, var(--danger-text) 55%, var(--line)); border-radius: var(--r-sm); font-size: var(--fs-caption); color: var(--text-2); }
+/* list rows on a sunken ground, as in the game */
+.mlist { display: grid; gap: 8px; margin-bottom: 12px; }
+.mrow { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; background: var(--sunken); border-radius: var(--r-sm); padding: 8px 12px; }
+.mrow .grow { flex: 1; min-width: 150px; }
+.mrow .mname { overflow-wrap: anywhere; }
+.mrow .av { width: 36px; height: 36px; border-radius: 50%; background: var(--panel-2); border: 2px solid var(--line); flex: none; }
+.pager { justify-content: center; }
 .row { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: center; }
 .row label { display: flex; align-items: center; gap: 8px; min-height: var(--control-h); }
 .empty { text-align: center; color: var(--muted); padding: 40px 16px; }

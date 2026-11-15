@@ -28,10 +28,12 @@ create extension if not exists http with schema extensions;
 create table if not exists public.members (
   user_id uuid primary key references auth.users on delete cascade,
   discord_id text not null,
-  name text not null,
+  name text not null,          -- shown on the page: server nickname, else display name
+  username text,               -- the Discord handle (@name), for the moderators' list
   avatar text,
   checked_at timestamptz not null default now()
 );
+alter table public.members add column if not exists username text;
 
 create table if not exists public.lots (
   id uuid primary key default gen_random_uuid(),
@@ -113,15 +115,17 @@ begin
   end if;
   body := raw::jsonb;
   if body->'user'->>'id' is distinct from did then raise exception 'mismatch'; end if;
-  insert into public.members (user_id, discord_id, name, avatar)
+  insert into public.members (user_id, discord_id, name, username, avatar)
   values (
     uid, did,
     left(coalesce(nullif(body->>'nick', ''), nullif(body->'user'->>'global_name', ''), body->'user'->>'username', 'Trainer'), 40),
+    left(body->'user'->>'username', 40),
     case when body->'user'->>'avatar' ~ '^[a-z0-9_]+$'
       then 'https://cdn.discordapp.com/avatars/' || did || '/' || (body->'user'->>'avatar') || '.png?size=64' end
   )
   on conflict (user_id) do update
-    set discord_id = excluded.discord_id, name = excluded.name, avatar = excluded.avatar, checked_at = now();
+    set discord_id = excluded.discord_id, name = excluded.name, username = excluded.username,
+        avatar = excluded.avatar, checked_at = now();
   return jsonb_build_object('member', true);
 end $$;
 
@@ -174,12 +178,14 @@ $$;
 
 -- ───────────────────────── 4. Submitting and voting ─────────────────────────
 
-create or replace function public.emote_files(uid uuid) returns int
+-- Files a member has sent that no lot uses (yet): the ones being prepared, or left behind.
+create or replace function public.emote_spare(uid uuid) returns int
 language sql stable security definer set search_path = '' as $$
   select count(*)::int from storage.objects o
   where o.bucket_id = 'emotes' and (storage.foldername(o.name))[1] = uid::text
+    and not exists (select 1 from public.emotes e where e.path = o.name)
 $$;
-revoke execute on function public.emote_files(uuid) from public, anon;
+revoke execute on function public.emote_spare(uuid) from public, anon;
 
 -- One lot per member. Sending again replaces it: back to « pending », votes cleared.
 create or replace function public.submit_lot(p_title text, p_note text, p_emotes jsonb) returns uuid
@@ -280,6 +286,41 @@ begin
   return paths;
 end $$;
 
+-- The verified members, 25 a page, by name; the search reads the name, the handle and the ID.
+create or replace function public.admin_members(p_search text, p_page int) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  q text := '%' || replace(replace(replace(btrim(coalesce(p_search, '')), '\', '\\'), '%', '\%'), '_', '\_') || '%';
+  pg int := greatest(coalesce(p_page, 1), 1);
+begin
+  if not public.is_admin() then raise exception 'admin'; end if;
+  return jsonb_build_object(
+    'total', (select count(*) from public.members m
+              where m.name ilike q or m.username ilike q or m.discord_id ilike q),
+    'rows', coalesce((
+      select jsonb_agg(to_jsonb(r)) from (
+        select m.name, m.username, m.discord_id, m.avatar, m.checked_at,
+          (select l.status from public.lots l where l.user_id = m.user_id) as lot,
+          (select count(*) from public.votes v where v.user_id = m.user_id) as votes
+        from public.members m
+        where m.name ilike q or m.username ilike q or m.discord_id ilike q
+        order by lower(m.name), m.user_id
+        limit 25 offset (pg - 1) * 25) r), '[]'::jsonb));
+end $$;
+
+-- Files no lot uses, sent more than an hour ago: for the page to remove from Storage.
+create or replace function public.admin_spare() returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  if not public.is_admin() then raise exception 'admin'; end if;
+  return coalesce((
+    select jsonb_agg(s.name) from (
+      select o.name from storage.objects o
+      where o.bucket_id = 'emotes' and o.created_at < now() - interval '1 hour'
+        and not exists (select 1 from public.emotes e where e.path = o.name)
+      order by o.created_at limit 500) s), '[]'::jsonb);
+end $$;
+
 create or replace function public.admin_config(p jsonb) returns void
 language plpgsql security definer set search_path = '' as $$
 begin
@@ -293,7 +334,9 @@ begin
 end $$;
 
 -- ───────────────────────── 6. Storage ─────────────────────────
--- Images only, 256 KB each (the limit of a Discord emote), 80 files per member.
+-- Images only, 256 KB each (the limit of a Discord emote). A member never holds more files
+-- without a lot than one lot needs (max_emotes): sending a lot frees them, and what stays
+-- unused for an hour is removed when a moderator opens the moderation tab (admin_spare).
 -- Public bucket: an image is shown by its address, but nobody can list the files.
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -307,15 +350,27 @@ create policy emotes_insert on storage.objects for insert to authenticated with 
   bucket_id = 'emotes'
   and (storage.foldername(name))[1] = auth.uid()::text
   and public.is_member()
-  and public.emote_files(auth.uid()) < 80
+  and public.emote_spare(auth.uid()) < (select c.max_emotes from public.config c)
 );
+
+drop function if exists public.emote_files(uuid);   -- the former count, once no policy uses it
 
 drop policy if exists emotes_select on storage.objects;
 create policy emotes_select on storage.objects for select to authenticated using (
   bucket_id = 'emotes' and ((storage.foldername(name))[1] = auth.uid()::text or public.is_admin())
 );
 
+-- A member cannot delete a file that a lot still uses: otherwise they could remove an approved
+-- image and upload another one under the same name, shown without review.
+create or replace function public.emote_in_use(p_path text) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.emotes e where e.path = p_path)
+$$;
+revoke execute on function public.emote_in_use(text) from public, anon;
+
 drop policy if exists emotes_delete on storage.objects;
 create policy emotes_delete on storage.objects for delete to authenticated using (
-  bucket_id = 'emotes' and ((storage.foldername(name))[1] = auth.uid()::text or public.is_admin())
+  bucket_id = 'emotes' and (
+    public.is_admin()
+    or ((storage.foldername(name))[1] = auth.uid()::text and not public.emote_in_use(name)))
 );

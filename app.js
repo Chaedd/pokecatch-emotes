@@ -44,8 +44,11 @@ const TEXTS = {
     e_title: 'Give your lot a name (60 characters max).', e_name: 'Check the emote names (2-32: a-z, 0-9, _, no duplicates).',
     e_count: 'Add at least one emote.', e_member: 'You must be a member of the Discord server.', e_closed: 'Submissions are closed.',
     e_novote: 'Voting is not open.', e_own: 'You cannot vote for your own lot.', e_maxvotes: 'You have used all your votes — remove one first.',
+    e_quota: 'Too many files sent without a lot. Try again in an hour, or ask a moderator.',
     e_generic: 'Something went wrong: {msg}',
     a_subs: 'Submissions open', a_votes: 'Voting open', a_counts: 'Scores visible to everyone', a_max: 'Votes per member',
+    a_lots: 'Lots', a_people: 'Members', m_search: 'Search a name, @handle or ID', m_count: '{n} members',
+    m_none: 'Nobody found.', m_prev: 'Previous', m_next: 'Next', m_page: 'Page {a} / {b}', m_nolot: 'No lot', m_since: 'since {d}',
     a_members: '{n} verified members · {l} lots', approve: 'Approve', reject: 'Reject', del: 'Delete',
     del_confirm: 'Delete this lot and its files for good?', download: 'Download (clean copies)',
   },
@@ -80,8 +83,11 @@ const TEXTS = {
     e_title: 'Donne un nom à ton lot (60 caractères max).', e_name: 'Vérifie les noms des emotes (2-32 : a-z, 0-9, _, sans doublon).',
     e_count: 'Ajoute au moins une emote.', e_member: 'Tu dois être membre du serveur Discord.', e_closed: 'Les dépôts sont fermés.',
     e_novote: 'Les votes ne sont pas ouverts.', e_own: 'Tu ne peux pas voter pour ton propre lot.', e_maxvotes: 'Tu as utilisé tous tes votes — retires-en un d\'abord.',
+    e_quota: 'Trop de fichiers envoyés sans lot. Réessaie dans une heure, ou demande à un modérateur.',
     e_generic: 'Une erreur est survenue : {msg}',
     a_subs: 'Dépôts ouverts', a_votes: 'Votes ouverts', a_counts: 'Scores visibles par tous', a_max: 'Votes par membre',
+    a_lots: 'Lots', a_people: 'Membres', m_search: 'Chercher un pseudo, un @identifiant ou un ID', m_count: '{n} membres',
+    m_none: 'Personne ne correspond.', m_prev: 'Précédent', m_next: 'Suivant', m_page: 'Page {a} / {b}', m_nolot: 'Pas de lot', m_since: 'depuis le {d}',
     a_members: '{n} membres vérifiés · {l} lots', approve: 'Approuver', reject: 'Refuser', del: 'Supprimer',
     del_confirm: 'Supprimer définitivement ce lot et ses fichiers ?', download: 'Télécharger (copies nettoyées)',
   },
@@ -239,7 +245,7 @@ function supabaseApi() {
     async upload(blob, ext) {
       const path = `${uid}/${crypto.randomUUID()}.${ext}`;
       const { error } = await sb.storage.from(BUCKET).upload(path, blob, { contentType: MIME[ext], cacheControl: '31536000' });
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(/row-level security/i.test(error.message) ? 'quota' : error.message);
       return path;
     },
     async remove(paths) { if (paths.length) await sb.storage.from(BUCKET).remove(paths); },
@@ -249,6 +255,8 @@ function supabaseApi() {
     adminSet: (id, status) => rpc('admin_set', { p_lot: id, p_status: status }),
     adminDelete: (id) => rpc('admin_delete', { p_lot: id }),
     adminConfig: (patch) => rpc('admin_config', { p: patch }),
+    adminSpare: () => rpc('admin_spare'),
+    adminMembers: (search, page) => rpc('admin_members', { p_search: search, p_page: page }),
   };
 }
 
@@ -309,6 +317,18 @@ function demoApi() {
     async adminSet(id, status) { db.lots.find((l) => l.id === id).status = status; },
     async adminDelete(id) { db.lots = db.lots.filter((l) => l.id !== id); return []; },
     async adminConfig(patch) { Object.assign(db.config, patch); },
+    async adminSpare() { return []; },
+    async adminMembers(search, page) {
+      const first = ['Ondine', 'Pierre', 'Flora', 'Major', 'Erika', 'Koga', 'Morgane', 'Auguste', 'Blue', 'Red', 'Leaf', 'Chen'];
+      const all = Array.from({ length: 64 }, (_, i) => ({
+        name: first[i % first.length] + (i < first.length ? '' : ' ' + (i + 1)), username: first[i % first.length].toLowerCase() + '_' + (100 + i),
+        discord_id: String(203581652809547776n + BigInt(i * 7919)), avatar: null, checked_at: new Date(Date.now() - i * 36e5).toISOString(),
+        lot: [null, 'approved', null, 'pending', null, null, 'rejected'][i % 7], votes: i % 4,
+      })).sort((a, b) => a.name.localeCompare(b.name));
+      const q = search.trim().toLowerCase();
+      const hit = all.filter((m) => !q || m.name.toLowerCase().includes(q) || m.username.includes(q) || m.discord_id.includes(q));
+      return { total: hit.length, rows: hit.slice((page - 1) * 25, page * 25) };
+    },
   };
 }
 
@@ -329,9 +349,17 @@ async function refresh() {
   try {
     S = await api.state();
     if (tab === 'admin' && !(S.me && S.me.admin)) tab = 'gallery';
-    if (tab === 'admin') A = await api.adminState();
+    if (tab === 'admin') { A = await api.adminState(); sweep(); }
   } catch (e) { flash = errText(e); }
   render();
+}
+
+// Files that no lot uses (a submission given up, a failed upload) are removed here, quietly.
+let swept = false;
+async function sweep() {
+  if (swept) return;
+  swept = true;
+  try { await api.remove(await api.adminSpare()); } catch (e) { console.warn(e); }
 }
 
 async function act(fn) {
@@ -513,6 +541,59 @@ async function downloadLot(lot) {
   }
 }
 
+// Members list of the moderation: 25 a page, searched on the server. The search box and the
+// list live apart from the page's redraws, so typing never loses the focus.
+const PER_PAGE = 25;
+let adminTab = 'lots';
+const M = { q: '', page: 1, data: null, box: null, input: null, timer: 0, seq: 0 };
+
+async function loadMembers() {
+  const seq = ++M.seq;
+  let data;
+  try { data = await api.adminMembers(M.q, M.page); } catch (e) { data = { total: 0, rows: [], err: errText(e) }; }
+  if (seq !== M.seq) return;   // a newer search is already on its way
+  M.data = data;
+  paintMembers();
+}
+
+function paintMembers() {
+  if (!M.box) return;
+  const d = M.data;
+  if (!d) return M.box.replaceChildren(h('div', { class: 'empty' }, '…'));
+  const pages = Math.max(1, Math.ceil(d.total / PER_PAGE));
+  const go = (p) => { M.page = p; loadMembers(); };
+  const wrap = h('div', null,
+    d.err && h('div', { class: 'notes' }, d.err),
+    h('p', { class: 'dim small' }, t('m_count', { n: d.total })),
+    d.rows.length ? h('div', { class: 'mlist' }, d.rows.map((m) =>
+      h('div', { class: 'mrow' },
+        m.avatar ? h('img', { class: 'av', src: m.avatar, alt: '', referrerPolicy: 'no-referrer', loading: 'lazy' }) : h('span', { class: 'av' }),
+        h('div', { class: 'grow' },
+          h('div', { class: 'mname' }, m.name),
+          h('div', { class: 'dim small' }, [m.username && '@' + m.username, m.discord_id].filter(Boolean).join(' · '))),
+        h('span', { class: 'dim small' }, t('m_since', { d: new Date(m.checked_at).toLocaleDateString(lang) })),
+        h('span', { class: 'badge' }, t('votes', { n: m.votes || 0 })),
+        h('span', { class: 'badge ' + (m.lot || '') }, m.lot ? t('st_' + m.lot) : t('m_nolot')))))
+      : h('div', { class: 'empty' }, t('m_none')),
+    h('div', { class: 'row pager' },
+      h('button', { class: 'mini', disabled: M.page <= 1, onclick: () => go(M.page - 1) }, '‹ ' + t('m_prev')),
+      h('span', { class: 'small' }, t('m_page', { a: Math.min(M.page, pages), b: pages })),
+      h('button', { class: 'mini', disabled: M.page >= pages, onclick: () => go(M.page + 1) }, t('m_next') + ' ›')));
+  M.box.replaceChildren(...wrap.childNodes);
+}
+
+function membersView() {
+  if (!M.input) M.input = h('input', { type: 'search', maxLength: 40, oninput: (ev) => {
+    M.q = ev.target.value; M.page = 1;
+    clearTimeout(M.timer); M.timer = setTimeout(loadMembers, 300);
+  } });
+  M.input.placeholder = t('m_search');
+  M.box = h('div', null);
+  paintMembers();
+  if (!M.data) loadMembers();
+  return h('div', { class: 'card' }, h('div', { class: 'field' }, M.input), M.box);
+}
+
 function adminView() {
   if (!A) return h('div', { class: 'empty' }, '…');
   const toggle = (key, label) => h('label', null,
@@ -525,7 +606,9 @@ function adminView() {
         h('label', null, t('a_max'), h('input', { type: 'number', min: 1, max: 20, value: A.config.max_votes,
           onchange: (ev) => act(() => api.adminConfig({ max_votes: Number(ev.target.value) || 3 })) }))),
       h('p', null), h('div', { class: 'dim small' }, t('a_members', { n: A.members, l: A.lots.length }))),
-    lots.length ? lots.map((lot) => lotCard(lot, [
+    h('div', { class: 'tabs' }, ['lots', 'members'].map((id) => h('button', { class: 'mini' + (adminTab === id ? ' on' : ''),
+      onclick: () => { adminTab = id; M.data = null; render(); } }, t(id === 'lots' ? 'a_lots' : 'a_people')))),
+    adminTab === 'members' ? membersView() : lots.length ? lots.map((lot) => lotCard(lot, [
       h('span', { class: 'badge ' + lot.status }, t('st_' + lot.status)),
       h('span', { class: 'badge' }, t('votes', { n: lot.votes || 0 })),
       lot.status !== 'approved' && h('button', { class: 'primary mini', onclick: () => act(() => api.adminSet(lot.id, 'approved')) }, t('approve')),
