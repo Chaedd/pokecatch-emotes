@@ -596,14 +596,17 @@ function membersView() {
 
 function adminView() {
   if (!A) return h('div', { class: 'empty' }, '…');
-  const toggle = (key, label) => h('label', null,
-    h('input', { type: 'checkbox', checked: !!A.config[key], onchange: (ev) => act(() => api.adminConfig({ [key]: ev.target.checked })) }), label);
+  // A switch as in the game's Options: the whole row is the target, applied at once.
+  const toggle = (key, label) => h('label', { class: 'sw-row' },
+    h('span', null, label),
+    h('input', { type: 'checkbox', role: 'switch', checked: !!A.config[key], onchange: (ev) => act(() => api.adminConfig({ [key]: ev.target.checked })) }),
+    h('span', { class: 'sw' }));
   const order = { pending: 0, approved: 1, rejected: 2 };
   const lots = [...A.lots].sort((a, b) => order[a.status] - order[b.status] || (b.votes || 0) - (a.votes || 0));
   return [
     h('div', { class: 'card' },
-      h('div', { class: 'row' }, toggle('submissions_open', t('a_subs')), toggle('votes_open', t('a_votes')), toggle('show_counts', t('a_counts')),
-        h('label', null, t('a_max'), h('input', { type: 'number', min: 1, max: 20, value: A.config.max_votes,
+      h('div', { class: 'sw-list' }, toggle('submissions_open', t('a_subs')), toggle('votes_open', t('a_votes')), toggle('show_counts', t('a_counts')),
+        h('label', { class: 'sw-row' }, h('span', null, t('a_max')), h('input', { type: 'number', min: 1, max: 20, value: A.config.max_votes,
           onchange: (ev) => act(() => api.adminConfig({ max_votes: Number(ev.target.value) || 3 })) }))),
       h('p', null), h('div', { class: 'dim small' }, t('a_members', { n: A.members, l: A.lots.length }))),
     h('div', { class: 'tabs' }, ['lots', 'members'].map((id) => h('button', { class: 'mini' + (adminTab === id ? ' on' : ''),
