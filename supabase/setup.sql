@@ -288,7 +288,8 @@ begin
     submissions_open = coalesce((p->>'submissions_open')::boolean, submissions_open),
     votes_open       = coalesce((p->>'votes_open')::boolean, votes_open),
     show_counts      = coalesce((p->>'show_counts')::boolean, show_counts),
-    max_votes        = least(greatest(coalesce((p->>'max_votes')::int, max_votes), 1), 20);
+    max_votes        = least(greatest(coalesce((p->>'max_votes')::int, max_votes), 1), 20)
+  where id;   -- the single row; Supabase refuses an UPDATE without WHERE
 end $$;
 
 -- ───────────────────────── 6. Storage ─────────────────────────

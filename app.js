@@ -541,7 +541,7 @@ function render() {
   const cfg = S.config, me = S.me;
   const phase = cfg.submissions_open && cfg.votes_open ? 'ph_both' : cfg.submissions_open ? 'ph_submit' : cfg.votes_open ? 'ph_vote' : 'ph_closed';
   const tabBtn = (id) => h('button', { class: tab === id ? 'on' : '', onclick: () => { tab = id; flash = ''; refresh(); } }, t('tab_' + id));
-  app.replaceChildren(
+  const page = h('div', null,
     h('header', null,
       h('h1', { class: 'grow' }, 'Poke\'Catch · ', h('span', null, t('title'))),
       h('button', { class: 'mini ghost', onclick: () => { lang = lang === 'fr' ? 'en' : 'fr'; try { localStorage.setItem('lang', lang); } catch { /* ignore */ } render(); } }, lang === 'fr' ? 'EN' : 'FR'),
@@ -555,6 +555,7 @@ function render() {
     flash && h('div', { class: 'banner' }, flash),
     h('div', { class: 'tabs' }, tabBtn('gallery'), tabBtn('mine'), me && me.admin && tabBtn('admin')),
     h('main', null, tab === 'gallery' ? galleryView() : tab === 'mine' ? mineView() : adminView()));
+  app.replaceChildren(...page.childNodes);   // through h(), so a false or empty item is dropped
 }
 
 // A file dropped beside the drop zone must not make the browser open it.
